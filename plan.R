@@ -7,23 +7,9 @@
 # model F: adjust D to esimtate control locations
 
 
-build_neighbors <- function(W){
-  
-  N <- nrow(W)
-  
-  maxNbr <- max(rowSums(W))
-  
-  nbr <- matrix(0,N,maxNbr)
-  numNbr <- rowSums(W)
-  
-  for(i in 1:N){
-    
-    ids <- which(W[i,]==1)
-    
-    nbr[i,1:length(ids)] <- ids
-    
-  }
-  
-  list(nbr=nbr, numNbr=numNbr, maxNbr=maxNbr)
-  
-}
+#Compare the 3 versions of model A before finalizing into a consolidated version
+# here, we will compare efficiency and coneistency of results for the 3 version over 3 simulations of 2000 iterations
+
+source("ModelA_baseline.r")
+source("ModelA_efficientLoop.r")
+source("ModelA_efficientNeighbour.r")
