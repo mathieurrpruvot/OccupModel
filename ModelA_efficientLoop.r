@@ -597,7 +597,7 @@ ViewMaps <- F
 
 
 ############################################################
-## 9. BUILD MODEL ONCE (REVISED SAFE INITIALIZATION)
+## 9. BUILD MODEL ONCE 
 ############################################################
 
 
@@ -633,21 +633,23 @@ for(i in 1:N){
 }
 
 # --- Provide initial values for missing detection data ---
-yScout_init <- ifelse(is.na(detec$yScout), 0, detec$yScout)
-yDrone_init <- ifelse(is.na(detec$yDrone), 0, detec$yDrone)
-yCam_init   <- ifelse(is.na(detec$yCam), 0, detec$yCam)
+#yScout_init <- ifelse(is.na(detec$yScout), 0, detec$yScout)
+#yDrone_init <- ifelse(is.na(detec$yDrone), 0, detec$yDrone)
+#yCam_init   <- ifelse(is.na(detec$yCam), 0, detec$yCam)
 
 # --- Combine data for Nimble ---
-data <- c(
-  land,
-  list(
-    yScout = yScout_init,
-    yDrone = yDrone_init,
-    yCam   = yCam_init
-  )
-)
+#data <- c(
+#  land,
+#  list(
+#    yScout = yScout_init,
+#    yDrone = yDrone_init,
+#    yCam   = yCam_init
+#  )
+#)
+data <- c(land,detec)
 
-# --- Initial values for all stochastic nodes ---
+
+# --- Initial values  ---
 inits <- list(
   z = z_inits,
   beta0=0, beta1=0, beta2=0,
@@ -656,10 +658,7 @@ inits <- list(
   theta0=0, theta_adequate=0, theta_good=0,
   eta0=0, eta_adequate=0, eta_good=0,
   phi0=0, phi_old=0, phi_fresh=0
-  #,
-  #yScout = yScout_init,
-  #yDrone = yDrone_init,
-  #yCam   = yCam_init
+
 )
 
 # --- Build and compile Nimble model ---
@@ -679,7 +678,7 @@ mcmc <- buildMCMC(conf)
 cmcmc <- compileNimble(mcmc, project=model)
 
 ############################################################
-## 10. SIMULATION LOOP (SAFE VERSION)
+## 10. SIMULATION LOOP
 ############################################################
 
 results_A_effL <- list()
@@ -707,7 +706,7 @@ for(sim in 1:nSim){
   cmodel$droneCond[,,] <- detec$droneCond
   cmodel$camFOV[,,,] <- detec$camFOV
   
-  # --- Update detection data with NA replaced by 0 ---
+  # --- Update detection data ---
   cmodel$setData(list(
     yScout = detec$yScout,
     yDrone = detec$yDrone,
