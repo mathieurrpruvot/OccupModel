@@ -621,8 +621,7 @@ conf <- configureMCMC(model, monitors=c(
   "delta0", "delta1",
   "theta0", "theta_adequate","theta_good",
   "eta0","eta_adequate","eta_good",
-  "phi0","phi_old","phi_fresh",
-  "z"
+  "phi0","phi_old","phi_fresh"
 ))
 
 mcmc <- buildMCMC(conf)
