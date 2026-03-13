@@ -600,19 +600,6 @@ ViewMaps <- F
 ## 9. BUILD MODEL ONCE (REVISED SAFE INITIALIZATION)
 ############################################################
 
-# Simulation parameters
-forest_prop <- 0.2      
-smooth_strength <- 7    
-pWeekActive <- 0.85     
-siteActiveProb <- 0.8   
-seasonGapProb <- 0.4    
-maxGapLength <- 3       
-siteWideWeekMiss <- 0.05 
-prop_cell_scout_gap <- 0.6
-prop_scout_replicate <- 0.7
-prop_cell_drone_gap <- 0.6
-prop_drone_replicate <- 0.75
-ViewMaps <- F
 
 # Constants for Nimble
 constants <- list(
@@ -668,10 +655,11 @@ inits <- list(
   delta0=0, delta1=0,
   theta0=0, theta_adequate=0, theta_good=0,
   eta0=0, eta_adequate=0, eta_good=0,
-  phi0=0, phi_old=0, phi_fresh=0,
-  yScout = yScout_init,
-  yDrone = yDrone_init,
-  yCam   = yCam_init
+  phi0=0, phi_old=0, phi_fresh=0
+  #,
+  #yScout = yScout_init,
+  #yDrone = yDrone_init,
+  #yCam   = yCam_init
 )
 
 # --- Build and compile Nimble model ---
@@ -720,9 +708,12 @@ for(sim in 1:nSim){
   cmodel$camFOV[,,,] <- detec$camFOV
   
   # --- Update detection data with NA replaced by 0 ---
-  cmodel$yScout[,,] <- ifelse(is.na(detec$yScout), 0, detec$yScout)
-  cmodel$yDrone[,,] <- ifelse(is.na(detec$yDrone), 0, detec$yDrone)
-  cmodel$yCam[,,,] <- ifelse(is.na(detec$yCam), 0, detec$yCam)
+  cmodel$setData(list(
+    yScout = detec$yScout,
+    yDrone = detec$yDrone,
+    yCam   = detec$yCam
+  ))
+  
   
   # --- Re-initialize latent states based on detection ---
   z_init <- matrix(0, N, T)
@@ -737,8 +728,8 @@ for(sim in 1:nSim){
   cmodel$z[,] <- z_init
   
   # --- Recalculate model ---
-  cmodel$calculate()
-  
+  #cmodel$calculate()
+
   # --- Run MCMC ---
   samples <- runMCMC(
     cmcmc,
