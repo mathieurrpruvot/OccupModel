@@ -844,4 +844,4 @@ end_time <- Sys.time()
 time_taken <- end_time - start_time
 
 # Print the result (default unit is seconds)
-print(time_taken)
+print(time_taken) #Time difference of 1.470934 hours
