@@ -14,7 +14,7 @@
 ############################################################
 ##          MODEL B
 ############################################################
-
+# Model properties include most of Model A baseline, but implement a distance kernel instead of a nighbour matrix
 
 ############################################################
 ## 1. LOAD LIBRARIES
@@ -253,7 +253,7 @@ monitorScout <- matrix(1, N, T)
 
 for(i in 1:N){
   
-  if(runif(1) < prop_cell_scout_gap){        # 30% of cells experience a monitoring gap
+  if(runif(1) < prop_cell_scout_gap){        
     
     start_gap <- sample(1:(T-3),1)
     length_gap <- sample(2:3,1)
@@ -618,8 +618,7 @@ conf <- configureMCMC(model, monitors=c(
  "delta0", "delta1",
  "theta0", "theta_adequate","theta_good",
  "eta0","eta_adequate","eta_good",
- "phi0","phi_old","phi_fresh",
- "z"
+ "phi0","phi_old","phi_fresh"
 ))
 
 mcmc <- buildMCMC(conf)
@@ -627,9 +626,9 @@ mcmc <- buildMCMC(conf)
 cmcmc <- compileNimble(mcmc,project=model)
 
 samples <- runMCMC(cmcmc,
-niter=3000,
+niter=2000,
 nburnin=1000,
-nchains=2,
+nchains=1,
 samplesAsCodaMCMC=TRUE)
 
 return(samples)
@@ -673,10 +672,9 @@ detec <- simulate_detection(z,prop_cell_scout_gap,prop_scout_replicate,
 
 samples <- fit_model(land,detec)
 
-  
-post <- summary(samples)$statistics[,"Mean"]
 
-results[[sim]] <- post
+
+results[[sim]] <- samples
 
 }
 
@@ -685,36 +683,158 @@ results[[sim]] <- post
 ## 11. PARAMETER RECOVERY
 ############################################################
 
+
+mcmc_to_matrix <- function(samples){
+  
+  if(inherits(samples,"mcmc.list")){
+    samp <- do.call(rbind, samples)
+  } else {
+    samp <- as.matrix(samples)
+  }
+  
+  return(samp)
+}
+
+# Etract Posterior summaries
+
+extract_results <- function(results, paramNames){
+  
+  nSim <- length(results)
+  
+  postMean <- matrix(NA,nSim,length(paramNames))
+  lowerCI <- matrix(NA,nSim,length(paramNames))
+  upperCI <- matrix(NA,nSim,length(paramNames))
+  
+  colnames(postMean) <- paramNames
+  colnames(lowerCI) <- paramNames
+  colnames(upperCI) <- paramNames
+  
+  for(s in 1:nSim){
+    
+    samp <- mcmc_to_matrix(results[[s]])
+    
+    for(p in paramNames){
+      
+      postMean[s,p] <- mean(samp[,p])
+      lowerCI[s,p] <- quantile(samp[,p],0.025)
+      upperCI[s,p] <- quantile(samp[,p],0.975)
+      
+    }
+  }
+  
+  list(
+    postMean=postMean,
+    lowerCI=lowerCI,
+    upperCI=upperCI
+  )
+  
+}
+
+
+# obtain bias, RMSE, rel RMSE, coverage
+
+evaluate_performance <- function(summaryRes,true){
+  
+  postMean <- summaryRes$postMean
+  lowerCI <- summaryRes$lowerCI
+  upperCI <- summaryRes$upperCI
+  
+  paramNames <- colnames(postMean)
+  trueVec <- unlist(true)
+  
+  nSim <- nrow(postMean)
+  
+  bias <- colMeans(postMean) - trueVec
+  
+  rmse <- sqrt(
+    colMeans(
+      (postMean - matrix(trueVec,nSim,length(trueVec),byrow=TRUE))^2
+    )
+  )
+  
+  relBias <- bias / abs(trueVec)
+  relRMSE <- rmse / abs(trueVec)
+  
+  coverage <- numeric(length(paramNames))
+  
+  for(p in 1:length(paramNames)){
+    
+    coverage[p] <- mean(
+      (trueVec[p] >= lowerCI[,p]) &
+        (trueVec[p] <= upperCI[,p])
+    )
+    
+  }
+  
+  data.frame(
+    parameter=paramNames,
+    true=trueVec,
+    bias=bias,
+    RMSE=rmse,
+    relBias=relBias,
+    relRMSE=relRMSE,
+    coverage=coverage
+  )
+  
+}
+
+# run eval
+
 paramNames <- names(true)
 
-estimates <- matrix(NA,nSim,length(paramNames))
+summaryRes <- extract_results(results,paramNames)
 
-colnames(estimates) <- paramNames
-
-for(i in 1:nSim){
-
-for(p in paramNames){
-
-estimates[i,p] <- results[[i]][p]
-
-}
-}
-
-bias <- colMeans(estimates) - unlist(true)
-
-rmse <- sqrt(colMeans((estimates -
-matrix(unlist(true),
-nSim,length(true),byrow=TRUE))^2))
-
-
-performance <- data.frame(
-parameter=paramNames,
-true=unlist(true),
-bias=bias,
-RMSE=rmse
-)
+performance <- evaluate_performance(summaryRes,true)
 
 print(performance)
+
+
+#parameter recovery plot
+plot_recovery <- function(postMean,true){
+  
+  paramNames <- colnames(postMean)
+  
+  df <- data.frame(
+    true=rep(unlist(true),each=nrow(postMean)),
+    estimate=as.vector(postMean),
+    parameter=rep(paramNames,each=nrow(postMean))
+  )
+  
+  ggplot(df,aes(true,estimate))+
+    geom_point(alpha=0.6)+
+    geom_abline(slope=1,intercept=0,color="red")+
+    facet_wrap(~parameter,scales="free")+
+    theme_minimal()+
+    labs(
+      title="Parameter recovery",
+      x="True value",
+      y="Posterior mean estimate"
+    )
+  
+}
+
+
+plot_recovery(summaryRes$postMean,true)
+
+plot_coverage <- function(performance){
+  
+  ggplot(performance,
+         aes(parameter,coverage))+
+    geom_bar(stat="identity")+
+    geom_hline(yintercept=0.95,
+               linetype="dashed",
+               color="red")+
+    ylim(0,1)+
+    theme_minimal()+
+    labs(
+      title="Coverage probability",
+      y="Coverage"
+    )
+  
+}
+
+plot_coverage(performance)
+
 
 
 # Record the end time
