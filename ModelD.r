@@ -12,10 +12,11 @@
 
 ##
 ############################################################
-##          MODEL C
+##          MODEL D
 ############################################################
-# Model properties include most of Model B baseline, but introduce 
-# pFP as the false positive rate to allow for sign detection to generate false positive
+# Model properties include baseline of Model C, but introduce 
+# old and fresh signs as latent processes, resulting in two more detection processes, each of them with their 
+# false positive rates to allow for sign detection to generate false positive
 
 ############################################################
 ## 1. LOAD LIBRARIES
@@ -48,7 +49,7 @@ T <- 8
 
 nScout <- 4
 nDrone <- 4
-maxCam <- 3
+maxCam <- 5 #this would eventually be specified by the nCam object as max(nCam)
 nWeek  <- 6
 
 nSim <- 3   # number of simulation replicates
@@ -155,22 +156,32 @@ alpha2 = 1,
 alpha3 = 0,
 alphaControl = -1.5,
 
+omicron0 = 0,
+
 delta0 = -1,
 delta1 = 1,
 
-theta0 = 0,
-theta_adequate = 0.4,
-theta_good = 0.8,
+theta0_old = 0.2,
+theta_adequate_old=0.4,
+theta_good_old=0.8,
+theta0_new=-0.5,
+theta_adequate_new=0.5,
+theta_good_new=1,
 
 eta0 = 0,
 eta_adequate = 0.5,
 eta_good = 1,
 
+zeta0=-1.1,
+zetaOld=1.5,
+zetaNew=2,
+
 phi0 = 0,
 phi_old = 0.5,
 phi_fresh = 1,
 
-alphaFP = 0.05 #false positive scouting prob
+alphaFP_old = 0.10, #false positive scouting prob for old signs
+alphaFP_new = 0.05 #false positive soutcing prob or new signs
 )
 
 
@@ -185,6 +196,8 @@ distCrop <- land$distCrop
 control <- land$control
 
 z <- matrix(0,N,T)
+So <- matrix(0,N,T)
+Sn <- matrix(0,N,T)
 
 psi1 <- plogis(true$beta0 +
 true$beta1*forest +
@@ -217,7 +230,16 @@ dftrueocc <- data.frame(occ=colSums(z),time=c(1:T))
 ggplot(dftrueocc) +
   geom_line(aes(time,occ))
 
-return(z)
+#generate latent sign process for old and new signs
+for(i in 1:N){
+for (t in 1:T){
+ Sn[i,t] <-  z[i,t]
+ pPersist <- plogis(true$omicron0)
+ So[i,t] <- rbinom(1,1,z[i,t-1]*pPersist+z[i,t-2]*pPersist^2) # presence of old sign depends on occupancy in previous 2 periods and the probability of persistence
+}
+}
+
+return(list(z=z,Sn=Sn,So=So))
 
 
 }
@@ -246,16 +268,21 @@ scoutCond <- array(sample(1:3,N*T*nScout,TRUE),
 droneCond <- array(sample(1:3,N*T*nDrone,TRUE),
 					c(N,T,nDrone))
 
-camFOV <- array(sample(1:3,N*T*maxCam*nWeek,TRUE),
-					c(N,T,maxCam,nWeek))
 
+# Determine site-level monitoring for scouting and camera trapping
+siteActive <- rbinom(N, 1, siteActiveProb)  # some sites never monitored
 
 ### SCOUT DATA
+
+#Determine Where scouting is happening
 
 monitorScout <- matrix(1, N, T)
 
 for(i in 1:N){
-  
+  if(siteActive[i]==1){
+    monitorScout[i,1:T] <- 0
+  }
+    
   if(runif(1) < prop_cell_scout_gap){        
     
     start_gap <- sample(1:(T-3),1)
@@ -265,8 +292,8 @@ for(i in 1:N){
   }
 }
 
-
-yScout <- array(NA,c(N,T,nScout))
+yScoutNew <- array(NA,c(N,T,nScout))
+yScoutOld <- array(NA,c(N,T,nScout))
 
 for(i in 1:N){
   for(t in 1:T){
@@ -277,11 +304,18 @@ for(i in 1:N){
         
         if(runif(1) < prop_scout_replicate){  # replicate conducted
           cond <- scoutCond[i,t,j]
-          p <- plogis(true$theta0 +  #proba detection of sign
-            (cond==2)*true$theta_adequate +
-            (cond==3)*true$theta_good)
-          pFP <- plogis(true$alphaFP) #assumed similar across sign types. cannot define as function of sign type, as this process hasn't been simulated yet
-          yScout[i,t,j] <- rbinom(1,1,z[i,t]*p + (1-z[i,t])*pFP)
+          p_old <- plogis(true$theta0_old +  #proba detection of sign
+            (cond==2)*true$theta_adequate_old +
+            (cond==3)*true$theta_good_old)
+          p_new <- plogis(true$theta0_new +  #proba detection of sign
+                        (cond==2)*true$theta_adequate_new +
+                        (cond==3)*true$theta_good_new)
+          pFP_old <- plogis(true$alphaFP_old)
+          pFP_new <- plogis(true$alphaFP_new)
+          
+          yScoutNew[i,t,j] <- rbinom(1,1,Sn[i,t]*p_new + (1-Sn[i,t])*pFP_new)
+          yScoutOld[i,t,j] <- rbinom(1,1,So[i,t]*p_old + (1-So[i,t])*pFP_old)
+          
         }
         
       }
@@ -291,7 +325,92 @@ for(i in 1:N){
   }
 }
 
+### Cam Field of View (now depends on scouting outcomes)
+camFOV <- array(NA,c(N,T,maxCam))
 
+for(i in 1:N){
+  for(t in 1:T){
+    for(j in 1:maxCam){
+camFOV[i,t,j] <- ifelse( yScoutNew[i,t,j]==1,3,ifelse(yScoutOld[i,t,j]==1,2,1))
+    }
+  }
+}
+
+
+
+### CAMERA DATA
+
+
+
+# Initialize arrays
+yCam <- array(NA, c(N, T, maxCam, nWeek))  # final detection array
+nCam <- matrix(0, N, T)                 # cameras deployed per site-season
+periodActive <- matrix(1, N, T)            # whether a season is monitored
+weekActive <- array(0, c(N, T, maxCam, nWeek))  # weekly replicate activity
+
+# NEED TO ADD THE DEPLOYMENT PROCESS:
+# DEPLOY
+# How to link deployment to scouting while keeping the optin for scouting-independent deployment
+# Decision to not link each scouting to a deployment outcome, as this would be too constraining on the data side 
+# Instead, we will link the overall old and fresh track finding at the cell level to a total number of camera deployed 
+# which still is an indicator of the intensity of monitoring
+
+nOldDetected <- apply(yScoutOld,c(1,2),sum)
+nNewDetected <- apply(yScoutNew,c(1,2),sum)
+
+
+lambda_cam <- exp(true$zeta0+true$zetaOld*log(1+nOldDetected)+true$zetaNew*log(1+nNewDetected))
+nCam <- matrix(rpois(N*T,lambda_cam),N,T) #nCam will be a data object
+        
+
+
+
+
+# Step 2: Generate seasonal gaps within active sites
+for(i in 1:N){
+  if(siteActive[i]==1 && runif(1)<seasonGapProb){
+    start <- sample(1:(T-maxGapLength), 1)
+    gapLength <- sample(2:maxGapLength,1)
+    periodActive[i, start:(start+gapLength-1)] <- 0
+  }
+}
+
+# Step 3: Simulate cameras and weekly replicates
+for(i in 1:N){
+  
+  if(siteActive[i]==1){   # skip completely inactive sites
+    
+    for(t in 1:T){
+      
+      if(periodActive[i,t]==1){  # skip missing seasons
+        
+        for(k in 1:nCam[i,t]){
+          
+          for(w in 1:nWeek){
+            
+            # site-wide week missing
+            if(runif(1) < siteWideWeekMiss){
+              weekActive[i,t,k,w] <- 0
+            } else {
+              # camera-level weekly probability
+              weekActive[i,t,k,w] <- rbinom(1,1,pWeekActive)
+            }
+            
+            # Assign detection if active, otherwise leave NA
+            if(weekActive[i,t,k,w]==1){
+              fov <- camFOV[i,t,k]
+              p <- plogis(true$phi0 +
+                            (fov==2)*true$phi_old +
+                            (fov==3)*true$phi_fresh)
+              yCam[i,t,k,w] <- rbinom(1,1,z[i,t]*p)
+            }
+            
+          } # end weeks
+        } # end cameras
+      } # end period active
+    } # end seasons
+  } # end site active
+} # end sites
 
 ### DRONE DATA
 
@@ -331,65 +450,7 @@ for(i in 1:N){
 }
 
 
-### CAMERA DATA
 
-# Initialize arrays
-yCam <- array(NA, c(N, T, maxCam, nWeek))  # final detection array
-nCam <- matrix(0, N, T)                    # cameras deployed per site-season
-periodActive <- matrix(1, N, T)            # whether a season is monitored
-weekActive <- array(0, c(N, T, maxCam, nWeek))  # weekly replicate activity
-
-# Step 1: Determine site-level monitoring
-siteActive <- rbinom(N, 1, siteActiveProb)  # some sites never monitored
-
-# Step 2: Generate seasonal gaps within active sites
-for(i in 1:N){
-  if(siteActive[i]==1 && runif(1)<seasonGapProb){
-    start <- sample(1:(T-maxGapLength), 1)
-    gapLength <- sample(2:maxGapLength,1)
-    periodActive[i, start:(start+gapLength-1)] <- 0
-  }
-}
-
-# Step 3: Simulate cameras and weekly replicates
-for(i in 1:N){
-  
-  if(siteActive[i]==1){   # skip completely inactive sites
-    
-    for(t in 1:T){
-      
-      if(periodActive[i,t]==1){  # skip missing seasons
-        
-        # Variable number of cameras per site-season
-        nCam[i,t] <- sample(1:maxCam, 1)
-        
-        for(k in 1:nCam[i,t]){
-          
-          for(w in 1:nWeek){
-            
-            # site-wide week missing
-            if(runif(1) < siteWideWeekMiss){
-              weekActive[i,t,k,w] <- 0
-            } else {
-              # camera-level weekly probability
-              weekActive[i,t,k,w] <- rbinom(1,1,pWeekActive)
-            }
-            
-            # Assign detection if active, otherwise leave NA
-            if(weekActive[i,t,k,w]==1){
-              fov <- camFOV[i,t,k,w]
-              p <- plogis(true$phi0 +
-                (fov==2)*true$phi_old +
-                (fov==3)*true$phi_fresh)
-              yCam[i,t,k,w] <- rbinom(1,1,z[i,t]*p)
-            }
-            
-          } # end weeks
-        } # end cameras
-      } # end period active
-    } # end seasons
-  } # end site active
-} # end sites
 
 # Visualiztion of camera trapping
 #####
@@ -661,7 +722,7 @@ prop_cell_scout_gap <- 0.6
 prop_scout_replicate <- 0.7
 prop_cell_drone_gap <- 0.6
 prop_drone_replicate <- 0.75
-ViewMaps <- F
+ViewMaps <- T
 
 results <- list()
 
@@ -671,7 +732,10 @@ cat("Simulation",sim,"\n")
 
 land <- simulate_landscape(forest_prop,smooth_strength)
 
-z <- simulate_occupancy(land,true)
+occup_data <- simulate_occupancy(land,true)
+z <- occup_data$z
+Sn <- occup_data$Sn
+So <- occup_data$So
 
 detec <- simulate_detection(z,prop_cell_scout_gap,prop_scout_replicate,
 								prop_cell_drone_gap,prop_drone_replicate,
