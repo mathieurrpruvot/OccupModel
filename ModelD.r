@@ -123,7 +123,7 @@ smooth_kern <- matrix(1, nrow = smooth_strength, ncol = smooth_strength)
 r_smooth <- focal(rasterforest, w = smooth_kern, fun = mean, na.rm = TRUE)
 
 # Convert to binary forest/non-forest
-threshold <- quantile(values(r_smooth), probs = 1 - forest_prop)
+threshold <- quantile(terra::values(r_smooth), probs = 1 - forest_prop)
 forest <- r_smooth > threshold
 forest <- c(as.matrix(forest)*1)
 
@@ -231,12 +231,16 @@ ggplot(dftrueocc) +
   geom_line(aes(time,occ))
 
 #generate latent sign process for old and new signs
+pPersist <- plogis(true$omicron0)
+
 for(i in 1:N){
-for (t in 1:T){
- Sn[i,t] <-  z[i,t]
- pPersist <- plogis(true$omicron0)
- So[i,t] <- rbinom(1,1,z[i,t-1]*pPersist+z[i,t-2]*pPersist^2) # presence of old sign depends on occupancy in previous 2 periods and the probability of persistence
-}
+  for (t in 1:T){
+  Sn[i,t] <-  z[i,t]
+  }
+  for(t in 3:T){
+  So[i,t] <- rbinom(1,1,z[i,t-1]*pPersist+z[i,t-2]*pPersist^2) # presence of old sign depends on occupancy in previous 2 periods and the probability of persistence
+    
+  }
 }
 
 return(list(z=z,Sn=Sn,So=So))
@@ -325,17 +329,6 @@ for(i in 1:N){
   }
 }
 
-### Cam Field of View (now depends on scouting outcomes)
-camFOV <- array(NA,c(N,T,maxCam))
-
-for(i in 1:N){
-  for(t in 1:T){
-    for(j in 1:maxCam){
-camFOV[i,t,j] <- ifelse( yScoutNew[i,t,j]==1,3,ifelse(yScoutOld[i,t,j]==1,2,1))
-    }
-  }
-}
-
 
 
 ### CAMERA DATA
@@ -343,8 +336,8 @@ camFOV[i,t,j] <- ifelse( yScoutNew[i,t,j]==1,3,ifelse(yScoutOld[i,t,j]==1,2,1))
 
 
 # Initialize arrays
-yCam <- array(NA, c(N, T, maxCam, nWeek))  # final detection array
 nCam <- matrix(0, N, T)                 # cameras deployed per site-season
+yCam <- array(NA, c(N, T, maxCam, nWeek))  # final detection array
 periodActive <- matrix(1, N, T)            # whether a season is monitored
 weekActive <- array(0, c(N, T, maxCam, nWeek))  # weekly replicate activity
 
@@ -355,14 +348,44 @@ weekActive <- array(0, c(N, T, maxCam, nWeek))  # weekly replicate activity
 # Instead, we will link the overall old and fresh track finding at the cell level to a total number of camera deployed 
 # which still is an indicator of the intensity of monitoring
 
-nOldDetected <- apply(yScoutOld,c(1,2),sum)
-nNewDetected <- apply(yScoutNew,c(1,2),sum)
+nNewDetected <- apply( yScoutNew,c(1,2),sum, na.rm=TRUE)
+nOldDetected <- apply( yScoutOld,c(1,2),sum, na.rm=TRUE)
+
 
 
 lambda_cam <- exp(true$zeta0+true$zetaOld*log(1+nOldDetected)+true$zetaNew*log(1+nNewDetected))
 nCam <- matrix(rpois(N*T,lambda_cam),N,T) #nCam will be a data object
-        
+nCam[nCam>maxCam] <- maxCam       # max out at maxCam
 
+
+### Cam Field of View (now depends on scouting outcomes)
+
+
+camFOV <- array(NA, c(N,T,maxCam))
+
+for(i in 1:N){
+  for(t in 1:T){
+    
+    if(nCam[i,t] > 0){
+      
+      scoreNew <- exp(2 * nNewDetected[i,t])
+      scoreOld   <- exp(1 * nOldDetected[i,t])
+      scoreNone  <- 1
+      
+      probs <- c(scoreNone, scoreOld, scoreNew)
+      probs <- probs / sum(probs)
+      
+      camFOV[i,t,1:nCam[i,t]] <- sample(
+        0:2,
+        size = nCam[i,t],
+        replace = TRUE,
+        prob = probs
+      )
+      
+    }
+    
+  }
+}
 
 
 
@@ -384,7 +407,7 @@ for(i in 1:N){
       
       if(periodActive[i,t]==1){  # skip missing seasons
         
-        for(k in 1:nCam[i,t]){
+        for(k in seq_len(nCam[i,t])){
           
           for(w in 1:nWeek){
             
@@ -399,9 +422,7 @@ for(i in 1:N){
             # Assign detection if active, otherwise leave NA
             if(weekActive[i,t,k,w]==1){
               fov <- camFOV[i,t,k]
-              p <- plogis(true$phi0 +
-                            (fov==2)*true$phi_old +
-                            (fov==3)*true$phi_fresh)
+              p <- plogis(true$phi0 +(fov==1)*true$phi_old + (fov==2)*true$phi_fresh)
               yCam[i,t,k,w] <- rbinom(1,1,z[i,t]*p)
             }
             
@@ -529,9 +550,11 @@ list(
 scoutCond=scoutCond,
 droneCond=droneCond,
 camFOV=camFOV,
-yScout=yScout,
+yScoutNew=yScoutNew,
+yScoutOld=yScoutOld,
 yDrone=yDrone,
-yCam=yCam
+yCam=yCam,
+nCam=nCam
 
 )
 
@@ -554,22 +577,33 @@ alpha2 ~ dnorm(0,0.001)
 alpha3 ~ dnorm(0,0.001)
 alphaControl ~ dnorm(0,0.001)
 
+omicron0 ~ dnorm(0,0.001)
+
 delta0 ~ dnorm(0,0.001)
 delta1 ~ dnorm(0,0.001)
 
-theta0 ~ dnorm(0,0.01)
-theta_adequate ~ dnorm(0,0.01)
-theta_good ~ dnorm(0,0.01)
+theta0_old ~ dnorm(0,0.01)
+theta_adequate_old ~ dnorm(0,0.01)
+theta_good_old ~ dnorm(0,0.01)
+
+theta0_new ~ dnorm(0,0.01)
+theta_adequate_new ~ dnorm(0,0.01)
+theta_good_new ~ dnorm(0,0.01)
 
 eta0 ~ dnorm(0,0.01)
 eta_adequate ~ dnorm(0,0.01)
 eta_good ~ dnorm(0,0.01)
 
+zeta0 ~ dnorm(0,0.01)
+zetaOld ~ dnorm(0,0.01)
+zetaNew ~ dnorm(0,0.01)
+
 phi0 ~ dnorm(0,0.01)
 phi_old ~ dnorm(0,0.01)
 phi_fresh ~ dnorm(0,0.01)
 
-alphaFP ~ dunif(0,0.3)
+alphaFP_old ~ dunif(0,0.3)
+alphaFP_new ~ dunif(0,0.3)
 
 
 for(i in 1:N){
@@ -600,19 +634,46 @@ for(i in 1:N){
 		z[i,t] ~ dbern(psi[i,t])
 
 	}
+	
+	#### latent sign process
+	
+logit(pPersist) <- omicron0
 
+for(t in 1:T)
+  {Sn[i,t] <- z[i,t]
+}
+
+for(t in 3:T){
+  So_prob[i,t] <- z[i,t-1]*pPersist + z[i,t-2]*pow(pPersist,2)
+  So[i,t] ~ dbern(So_prob[i,t])
+}
 
 	for(t in 1:T){
 
 		for(j in 1:nScout){
 
-			logit(pS[i,t,j]) <- theta0 +
-			equals(scoutCond[i,t,j],2)*theta_adequate +
-			equals(scoutCond[i,t,j],3)*theta_good
-			
-			logit(pFP[i,t,j]) <- alphaFP
-
-			yScout[i,t,j] ~ dbern(z[i,t]*pS[i,t,j]+(1-z[i,t])*pFP[i,t,j])
+		  # OLD signs
+		  logit(pS_old[i,t,j]) <- theta0_old +
+		    equals(scoutCond[i,t,j],2)*theta_adequate_old +
+		    equals(scoutCond[i,t,j],3)*theta_good_old
+		  
+		  logit(pFP_old[i,t,j]) <- alphaFP_old
+		  
+		  yScoutOld[i,t,j] ~ dbern(
+		    So[i,t]*pS_old[i,t,j] +
+		      (1-So[i,t])*pFP_old[i,t,j]
+		  )
+		  # NEW signs
+		  logit(pS_new[i,t,j]) <- theta0_new +
+		    equals(scoutCond[i,t,j],2)*theta_adequate_new +
+		    equals(scoutCond[i,t,j],3)*theta_good_new
+		  
+		  logit(pFP_new[i,t,j]) <- alphaFP_new
+		  
+		  yScoutNew[i,t,j] ~ dbern(
+		    Sn[i,t]*pS_new[i,t,j] +
+		      (1-Sn[i,t])*pFP_new[i,t,j]
+		  )
 		}
 
 
